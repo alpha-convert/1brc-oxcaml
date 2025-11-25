@@ -30,7 +30,7 @@ let process_file buf =
   let tbl = String.Table.create () in
   let buf_len = Bigstring.length buf in
 
-  let [@zero_alloc] digit_at  i = Int64_u.of_int (Char.get_digit_exn (Bigstring.unsafe_get buf i)) in
+  let [@zero_alloc] digit_at i = Int64_u.of_int (Char.get_digit_exn (Bigstring.unsafe_get buf i)) in
   let [@zero_alloc] parse_positive (i : int) =
     if Char.(=) (Bigstring.unsafe_get buf (i + 1)) '.' then
       (* x.y *)
@@ -54,14 +54,15 @@ let process_file buf =
       parse_positive i
     in
 
-  let parse_from i = 
+  let parse_line i = 
     let i_semic = Bigstring.unsafe_find ~pos:i ~len:(buf_len - i) buf ';' in
     let town = Bigstring.get_string ~pos:i ~len:(i_semic - i) buf in
     let #(temp,i_newline) = parse_temp (i_semic + 1) in
     #(town,temp,i_newline + 1) in
+
   let rec loop i =
-    if i >= buf_len  then () else
-      let #(town,temp,idx_next) = parse_from i in
+    if i >= buf_len then () else
+      let #(town,temp,idx_next) = parse_line i in
       let record = Hashtbl.find_or_add tbl town ~default:(fun () -> {Record.count = #0L; min = Int64_u.max_value (); max = Int64_u.min_value (); tot = #0L}) in
       record.count <- Int64_u.(record.count + #1L);
       record.min <- Int64_u.min record.min temp;
@@ -75,7 +76,6 @@ let process_file buf =
 let compute ~measurements ~outfile =
   let meas_fd = openfile ~mode:[O_RDONLY] measurements in
   let meas_data : Bigstring.t = Bigarray.array1_of_genarray (map_file meas_fd Bigarray.char Bigarray.c_layout ~shared:false [|-1|]) in
-  (* let fcontents = In_channel.read_all measurements in *)
   let res = process_file meas_data in
   let ofd = Out_channel.create outfile in
   Out_channel.output_string ofd "{";

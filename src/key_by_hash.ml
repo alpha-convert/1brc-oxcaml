@@ -1,10 +1,12 @@
 open! Core
 open! Core_unix
-let name = "fixed_precision"
+let name = "key_by_hash"
 
 module Record : sig
   (* Min, Max, and Tot are all stored as 10x their true value. *)
   type t = {
+    town_idx : int;
+    town_len : int;
     mutable count : Int64_u.t;
     mutable min : Int64_u.t;
     mutable max : Int64_u.t;
@@ -13,6 +15,8 @@ module Record : sig
 end
 = struct
   type t = {
+    town_idx : int;
+    town_len : int;
     mutable count : Int64_u.t;
     mutable min : Int64_u.t;
     mutable max : Int64_u.t;
@@ -27,10 +31,10 @@ let to_floating fixed =
   Float_u.to_float (Int64_u.to_float fixed) /. 10.0
 
 let process_file buf =
-  let tbl = String.Table.create () in
+  let tbl = Int.Table.create () in
   let buf_len = Bigstring.length buf in
 
-  let [@zero_alloc] digit_at  i = Int64_u.of_int (Char.get_digit_exn (Bigstring.unsafe_get buf i)) in
+  let [@zero_alloc] digit_at i = Int64_u.of_int (Char.get_digit_exn (Bigstring.unsafe_get buf i)) in
   let [@zero_alloc] parse_positive (i : int) =
     if Char.(=) (Bigstring.unsafe_get buf (i + 1)) '.' then
       (* x.y *)
@@ -54,15 +58,26 @@ let process_file buf =
       parse_positive i
     in
 
-  let parse_from i = 
+  let [@zero_alloc] rec hash_town_aux h i end_pos =
+    if Int.(=) i end_pos then h
+    else
+      hash_town_aux (h * 31 + (Bigstring.unsafe_get_int8 ~pos:i buf)) (i + 1) end_pos
+  in
+  let [@zero_alloc] hash_town ~start_pos ~end_pos =
+    hash_town_aux 0 start_pos end_pos
+  in
+
+  let [@zero_alloc] parse_line i =
     let i_semic = Bigstring.unsafe_find ~pos:i ~len:(buf_len - i) buf ';' in
-    let town = Bigstring.get_string ~pos:i ~len:(i_semic - i) buf in
+    let town_hash = hash_town ~start_pos:i ~end_pos:i_semic in
     let #(temp,i_newline) = parse_temp (i_semic + 1) in
-    #(town,temp,i_newline + 1) in
+    let town_len = i_semic - i in
+    #(town_hash,town_len,temp,i_newline + 1) in
+
   let rec loop i =
-    if i >= buf_len  then () else
-      let #(town,temp,idx_next) = parse_from i in
-      let record = Hashtbl.find_or_add tbl town ~default:(fun () -> {Record.count = #0L; min = Int64_u.max_value (); max = Int64_u.min_value (); tot = #0L}) in
+    if i >= buf_len then () else
+      let #(town_hash,town_len,temp,idx_next) = parse_line i in
+      let record = Hashtbl.find_or_add tbl town_hash ~default:(fun () -> {Record.town_idx = i; town_len; count = #0L; min = Int64_u.max_value (); max = Int64_u.min_value (); tot = #0L}) in
       record.count <- Int64_u.(record.count + #1L);
       record.min <- Int64_u.min record.min temp;
       record.max <- Int64_u.max record.max temp;
@@ -74,16 +89,16 @@ let process_file buf =
 
 let compute ~measurements ~outfile =
   let meas_fd = openfile ~mode:[O_RDONLY] measurements in
-  let meas_data : Bigstring.t = Bigarray.array1_of_genarray (map_file meas_fd Bigarray.char Bigarray.c_layout ~shared:false [|-1|]) in
-  (* let fcontents = In_channel.read_all measurements in *)
-  let res = process_file meas_data in
+  let buf : Bigstring.t = Bigarray.array1_of_genarray (map_file meas_fd Bigarray.char Bigarray.c_layout ~shared:false [|-1|]) in
+  let res = process_file buf in
   let ofd = Out_channel.create outfile in
   Out_channel.output_string ofd "{";
-  Hashtbl.iteri res ~f:(fun ~key ~data ->
+  Hashtbl.iteri res ~f:(fun ~key:_ ~data ->
     let min = to_floating data.min in
     let max = to_floating data.max in
     let tot = to_floating data.tot in
     let mean = tot /. (Float_u.to_float (Int64_u.to_float data.count)) in
-    Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f," key min mean max)
+    let town = Bigstring.get_string ~pos:data.town_idx ~len:data.town_len buf in
+    Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f," town min mean max)
   );
   Out_channel.output_string ofd "}";

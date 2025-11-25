@@ -18,5 +18,7 @@ let () = Command_unix.run (
     bench (module One_brc.Imperative) "1mm";
     bench (module One_brc.Unboxed) "1mm";
     bench (module One_brc.Mmap) "1mm";
+    bench (module One_brc.Fixed_precision) "1mm";
+    bench (module One_brc.Key_by_hash) "1mm";
   ]
 )
