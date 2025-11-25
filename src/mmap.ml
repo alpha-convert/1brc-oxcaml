@@ -1,4 +1,3 @@
-open! Base
 open! Core
 open! Core_unix
 let name = "mmap"
@@ -22,14 +21,15 @@ end
 
 let process_file buf =
   let tbl = String.Table.create () in
+  let buf_len = Bigstring.length buf in
   let parse_from i = 
-    let i_semic = Option.value_exn (Bigstring.find ~pos:i ';' buf) in
-    let i_newline = Option.value_exn (Bigstring.find ~pos:i_semic '\n' buf) in
+    let i_semic = Bigstring.unsafe_find ~pos:i ~len:(buf_len - i) buf ';' in
+    let i_newline = Bigstring.unsafe_find ~pos:i_semic ~len:(buf_len - i_semic) buf '\n' in
     let town = Bigstring.get_string ~pos:i ~len:(i_semic - i) buf in
     let temp_s = Bigstring.get_string ~pos:(i_semic + 1) ~len:(i_newline - (i_semic + 1)) buf in
     #(town,temp_s,i_newline + 1) in
   let rec loop i =
-    if i >= Bigstring.length buf then () else
+    if i >= buf_len  then () else
       let #(town,temp_s,idx_next) = parse_from i in
       let temp = Float_u.of_string temp_s in
       let record = Hashtbl.find_or_add tbl town ~default:(fun () -> {Record.count = #0L; min = Float_u.max_value (); max = Float_u.min_value (); tot = #0.0}) in
