@@ -1,0 +1,6 @@
+(library
+ (name one_brc)
+ (libraries core parallel core_unix)
+ (inline_tests)
+ (preprocess
+  (pps ppx_jane)))

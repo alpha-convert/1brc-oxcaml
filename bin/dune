@@ -1,0 +1,7 @@
+(executable
+ (name main)
+ (link_flags -linkall)
+ (libraries base core core_unix one_brc core_bench)
+ (preprocess
+  (pps ppx_jane))
+ )
