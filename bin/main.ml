@@ -15,6 +15,8 @@ let bench i num =
 let () = Command_unix.run (
   Bench.make_command [
     bench (module One_brc.Reference) "1mm";
-    bench (module One_brc.Imperative) "1mm"
+    bench (module One_brc.Imperative) "1mm";
+    bench (module One_brc.Unboxed) "1mm";
+    bench (module One_brc.Mmap) "1mm";
   ]
 )
