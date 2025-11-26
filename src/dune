@@ -1,6 +1,6 @@
 (library
  (name one_brc)
- (libraries core parallel core_unix parallel.scheduler)
+ (libraries core parallel core_unix parallel.scheduler portable_lockfree_htbl portable)
  (inline_tests)
  (preprocess
   (pps ppx_jane)))

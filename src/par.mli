@@ -1,1 +1,1 @@
-(* include One_brc_intf.T *)
+include One_brc_intf.T
