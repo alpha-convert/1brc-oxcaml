@@ -4,6 +4,7 @@ open! Parallel
 module Par_seq = Parallel.Sequence
 module Tbl = Portable_lockfree_htbl
 
+
 let name = "par"
 
 let magic_shared (x : 'a) : 'a @ shared = Obj.magic Obj.magic x
@@ -11,6 +12,7 @@ let magic_uncontended (x : 'a) : 'a @ uncontended = Obj.magic Obj.magic x
 let magic_portable (x : 'a) : 'a @ portable = Obj.magic Obj.magic x
 
 (* Bigstring.unsafe_find doesn't yet take its argument shared-ly... *)
+
 external unsafe_bigstring_find
 : Bigstring.t @ shared
   -> char
@@ -20,29 +22,9 @@ external unsafe_bigstring_find
   @@ portable
   = "bigstring_find"
 [@@noalloc]
-    (* let find_newline_or_end pos =
-      if pos >= buf_len then buf_len
-      else
-        let nl_pos = unsafe_bigstring_find ~pos ~len:(buf_len - pos) buf '\n' in
-        nl_pos + 1
-    in
-    let boundaries : int array =
-      Array.init (num_chunks + 1) ~f:(fun i ->
-        let approx = (i * buf_len) / num_chunks in
-          if i = 0 then 0
-          else if i = num_chunks then buf_len
-          else find_newline_or_end approx)
-    in
-    let chunks =
-      Parallel_array.of_array
-        (Array.init num_chunks ~f:(fun i -> (boundaries.(i), boundaries.(i + 1))))
-    in *)
-
-
 
 
 module Record : sig
-  (* Min, Max, and Tot are all stored as 10x their true value. *)
   type t = {
     town_idx : int;
     town_len : int;
@@ -106,7 +88,7 @@ let [@zero_alloc] parse_line buf ~(start_idx : int) ~(semic_idx : int) =
   #(~town_hash,~temp)
 
 
-let split_entries (buf @ shared) : (start_idx:int * semic_idx:int) Par_seq.t =
+let split_lines (buf @ shared) : (start_idx:int * semic_idx:int) Par_seq.t =
   let next _ (start_idx,end_idx) = 
     if start_idx >= end_idx then
       Pair_or_null.none ()
@@ -126,10 +108,10 @@ let split_entries (buf @ shared) : (start_idx:int * semic_idx:int) Par_seq.t =
         let half_start = 1 + unsafe_bigstring_find ~pos:half_approx ~len:(end_idx - half_approx) buf '\n' in
         Pair_or_null.some (start_idx,half_start) (half_start,end_idx)
   in
-  let buf_len : int = Bigstring.length buf in
+  let buf_len = Bigstring.length buf in
   exclave_ (Par_seq.unfold ~init:((0,buf_len) : int * int) ~next:(magic_portable next) ~split:(magic_portable split))
 
-let compute_record  (buf @ shared) (tbl @ contended) ~start_idx ~semic_idx =
+let compute_record  (buf @ shared) tbl ~start_idx ~semic_idx =
   let #(~town_hash,~temp) = parse_line buf ~start_idx ~semic_idx in
   let maybe_record = Tbl.find tbl town_hash in
   match%optional.Or_null (magic_uncontended maybe_record) with
@@ -154,13 +136,13 @@ module Int_hashable : Tbl.Hashable with type t = Int.t = struct
 end
 
 let compute ~measurements ~outfile =
-  let scheduler = Parallel_scheduler.create ~max_domains:1 () in
+  let scheduler = Parallel_scheduler.create ~max_domains:10 () in
   Parallel_scheduler.parallel scheduler ~f:(fun parallel ->
     let meas_fd = openfile ~mode:[O_RDONLY] measurements in
     let buf @ shared = Bigarray.array1_of_genarray (map_file meas_fd Bigarray.char Bigarray.c_layout ~shared:false [|-1|]) in
     let tbl = Tbl.create (module Int_hashable) ~min_buckets:10000 in
 
-    let entries = split_entries buf in
+    let entries = split_lines buf in
     Par_seq.iter parallel entries ~f:(fun _ (~start_idx,~semic_idx) -> compute_record (magic_shared buf) tbl ~start_idx ~semic_idx);
 
     let ofd = Out_channel.create outfile in
