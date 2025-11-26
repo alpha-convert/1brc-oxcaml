@@ -1,6 +1,21 @@
-open! Core
+(* open! Core
 open! Core_unix
-let name = "branchless"
+open! Parallel
+module Parallel_array = Parallel.Arrays.Array
+
+let name = "par"
+
+(* Bigstring.unsafe_find doesn't yet take its argument shared-ly... *)
+external unsafe_bigstring_find
+: Bigstring.t @ shared
+  -> char
+  -> pos:int
+  -> len:int
+  -> int
+  @@ portable
+  = "bigstring_find"
+[@@noalloc]
+
 
 module Record : sig
   (* Min, Max, and Tot are all stored as 10x their true value. *)
@@ -30,7 +45,7 @@ let [@zero_alloc] to_fixed ~fracs ~ones ~tens =
 let to_floating fixed =
   Float_u.to_float (Int64_u.to_float fixed) /. 10.0
 
-let process_file buf =
+let process_file (buf @ shared) ~chunk_start ~chunk_end =
   let tbl = Int.Table.create () in
   let buf_len = Bigstring.length buf in
 
@@ -52,7 +67,7 @@ let process_file buf =
 
     let fracs = Int64_u.(of_int (Bool.select is_dot buf2 buf3) - #48L) in
     let ones = Int64_u.(of_int (Bool.select is_dot buf0 buf1) - #48L) in
-    let tens = Int64_u.(of_int (Bool.select is_dot 48 buf0) - #48L) in
+    let tens = Int64_u.(of_int (Bool.select is_dot 0 buf0) - #48L) in
 
     let v = Int64_u.(f * to_fixed ~fracs ~ones ~tens) in
     #(v, i' + Bool.select is_dot 3 4)
@@ -69,7 +84,7 @@ let process_file buf =
   in
 
   let [@zero_alloc] parse_line i =
-    let i_semic = Bigstring.unsafe_find ~pos:i ~len:(buf_len - i) buf ';' in
+    let i_semic = unsafe_bigstring_find ~pos:i ~len:(buf_len - i) buf ';' in
     let town_hash = hash_town ~start_pos:i ~end_pos:i_semic in
     let #(temp,i_newline) = parse_temp (i_semic + 1) in
     let town_len = i_semic - i in
@@ -77,7 +92,7 @@ let process_file buf =
   in
 
   let rec loop i =
-    if i >= buf_len then
+    if i >= chunk_end then
       ()
     else
       let #(town_hash,town_len,temp,idx_next) = parse_line i in
@@ -88,21 +103,63 @@ let process_file buf =
       record.tot <- Int64_u.(record.tot + temp);
       loop idx_next
   in
-  loop 0;
+  loop chunk_start;
   tbl
 
 let compute ~measurements ~outfile =
-  let meas_fd = openfile ~mode:[O_RDONLY] measurements in
-  let buf : Bigstring.t = Bigarray.array1_of_genarray (map_file meas_fd Bigarray.char Bigarray.c_layout ~shared:false [|-1|]) in
-  let res = process_file buf in
-  let ofd = Out_channel.create outfile in
-  Out_channel.output_string ofd "{";
-  Hashtbl.iteri res ~f:(fun ~key:_ ~data ->
-    let min = to_floating data.min in
-    let max = to_floating data.max in
-    let tot = to_floating data.tot in
-    let mean = tot /. (Float_u.to_float (Int64_u.to_float data.count)) in
-    let town = Bigstring.get_string ~pos:data.town_idx ~len:data.town_len buf in
-    Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f," town min mean max)
-  );
-  Out_channel.output_string ofd "}";
+
+  let scheduler = Parallel_scheduler.create ~max_domains:10 () in
+  Parallel_scheduler.parallel scheduler ~f:(fun parallel ->
+    let meas_fd = openfile ~mode:[O_RDONLY] measurements in
+    let buf @ shared = Bigarray.array1_of_genarray (map_file meas_fd Bigarray.char Bigarray.c_layout ~shared:false [|-1|]) in
+    let num_chunks = 8 in
+    let buf_len = Bigstring.length buf in
+
+    let find_newline_or_end pos =
+      if pos >= buf_len then buf_len
+      else
+        let nl_pos = unsafe_bigstring_find ~pos ~len:(buf_len - pos) buf '\n' in
+        nl_pos + 1
+    in
+    let boundaries : int array =
+      Array.init (num_chunks + 1) ~f:(fun i ->
+        let approx = (i * buf_len) / num_chunks in
+          if i = 0 then 0
+          else if i = num_chunks then buf_len
+          else find_newline_or_end approx)
+    in
+    let chunks =
+      Parallel_array.of_array
+        (Array.init num_chunks ~f:(fun i -> (boundaries.(i), boundaries.(i + 1))))
+    in
+
+     (* val reduce
+    : ('a : value mod contended portable).
+    Parallel_kernel.t @ local
+    -> 'a t @ shared
+    -> f:(Parallel_kernel.t @ local -> 'a -> 'a -> 'a) @ portable
+    -> 'a option *)
+    let chunk_results =
+      Parallel_array.map parallel chunks ~f:(fun _ (chunk_start, chunk_end) ->
+        process_file buf ~chunk_start ~chunk_end
+      )
+    in
+    (* let res = Parallel_array.reduce parallel chunks ~f:() *)
+
+    let res = process_file buf ~chunk_start:0 ~chunk_end:buf_len in
+    let ofd = Out_channel.create outfile in
+    Out_channel.output_string ofd "{";
+    Hashtbl.iteri res ~f:(fun ~key:_ ~data ->
+      let min = to_floating data.min in
+      let max = to_floating data.max in
+      let tot = to_floating data.tot in
+      let mean = tot /. (Float_u.to_float (Int64_u.to_float data.count)) in
+      let town = Bigstring.get_string ~pos:data.town_idx ~len:data.town_len buf in
+      Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f," town min mean max)
+    );
+    Out_channel.output_string ofd "}";
+  )
+
+
+
+   *)

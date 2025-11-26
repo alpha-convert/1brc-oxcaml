@@ -1,6 +1,6 @@
 (library
  (name one_brc)
- (libraries core parallel core_unix)
+ (libraries core parallel core_unix parallel.scheduler)
  (inline_tests)
  (preprocess
   (pps ppx_jane)))
