@@ -1,6 +1,6 @@
 open! Core
 open! Core_unix
-let name = "key_by_hash"
+let name = "branchless"
 
 module Record : sig
   (* Min, Max, and Tot are all stored as 10x their true value. *)
@@ -34,32 +34,33 @@ let process_file buf =
   let tbl = Int.Table.create () in
   let buf_len = Bigstring.length buf in
 
-  let [@zero_alloc] digit_at i = Int64_u.of_int (Char.get_digit_exn (Bigstring.unsafe_get buf i)) in
-  let [@zero_alloc] parse_positive (i : int) =
-    if Char.(=) (Bigstring.unsafe_get buf (i + 1)) '.' then
-      (* x.y *)
-      let ones = digit_at i in
-      let fracs = digit_at (i + 2) in
-      #(to_fixed ~fracs ~ones ~tens:#0L, i + 3)
-    else
-      (* xy.z *)
-      let tens = digit_at i in
-      let ones = digit_at (i + 1) in
-      let fracs = digit_at (i + 3) in
-      #(to_fixed ~fracs ~ones ~tens ,i + 4)
-  in
+  let dot_code = Char.to_int '.' in
+  let dash_code = Char.to_int '-' in
 
   let [@zero_alloc] parse_temp i =
-    let maybe_negative = Bigstring.unsafe_get buf i in
-    if Char.(maybe_negative = '-') then
-      let #(v,end_idx) = parse_positive (i + 1) in
-      #(Int64_u.(-#1L * v),end_idx)
-    else
-      parse_positive i
-    in
+    let buf_i = Bigstring.unsafe_get_int8 buf ~pos:i in
+    let b = Bool.to_int (Int.(=) buf_i dash_code) in
+    let i' = b * (i+1) + (1-b) * i in
+    let f = Int64_u.of_int (1 - 2*b) in
+
+    let buf0 = Base_bigstring.unsafe_get_int8 buf ~pos:i' in
+    let buf1 = Base_bigstring.unsafe_get_int8 buf ~pos:(i' + 1) in
+    let buf2 = Base_bigstring.unsafe_get_int8 buf ~pos:(i' + 2) in
+    let buf3 = Base_bigstring.unsafe_get_int8 buf ~pos:(i' + 3) in
+
+    let b = Bool.to_int (Int.(=) buf1 dot_code) in
+
+    let fracs = Int64_u.of_int (b * (buf2 - 48) + (1 - b) * (buf3 - 48)) in
+    let ones = Int64_u.of_int (b * (buf0 - 48) + (1 - b) * (buf1 - 48)) in
+    let tens = Int64_u.of_int ((1 - b) * (buf0 - 48)) in
+
+    let v = Int64_u.(f * to_fixed ~fracs ~ones ~tens) in
+    #(v, i' + 4 - b)
+  in
 
   let [@zero_alloc] rec hash_town_aux h i end_pos =
-    if Int.(=) i end_pos then h
+    if Int.(=) i end_pos then
+      h
     else
       hash_town_aux (h * 31 + (Bigstring.unsafe_get_int8 ~pos:i buf)) (i + 1) end_pos
   in
