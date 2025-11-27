@@ -89,23 +89,22 @@ let [@zero_alloc] parse_line buf ~(start_idx : int) ~(semic_idx : int) =
 let max_with temp (x @ contended) @ portable = Int.max temp x
 let min_with temp (x @ contended) @ portable = Int.min temp x
 
+let update_record (record : Record.t) temp =
+  Atomic.incr record.count;
+  Atomic.update record.min ~pure_f:(min_with temp);
+  Atomic.update record.max ~pure_f:(max_with temp);
+  Atomic.add record.tot temp
+
 let compute_record (buf @ shared) tbl ~start_idx ~semic_idx =
   let #(~town_hash,~temp) = parse_line buf ~start_idx ~semic_idx in
   let maybe_record = Tbl.find tbl town_hash in
   match%optional.Or_null (magic_uncontended maybe_record) with
   | None ->
-      ignore (Tbl.add tbl ~key:town_hash ~data:{Record.town_idx = start_idx;
-               town_len = semic_idx - start_idx;
-               count = Atomic.make 1;
-               min = Atomic.make temp;
-               max = Atomic.make temp;
-               tot = Atomic.make temp})
-  | Some record -> 
-    Atomic.incr record.count;
-    Atomic.update record.min ~pure_f:(min_with temp);
-    Atomic.update record.max ~pure_f:(max_with temp);
-    Atomic.add record.tot temp
-
+      let data = {Record.town_idx = start_idx; town_len = semic_idx - start_idx; count = Atomic.make 1; min = Atomic.make temp; max = Atomic.make temp; tot = Atomic.make temp} in
+      (match%optional.Or_null (Tbl.add tbl ~key:town_hash ~data) with
+      | None -> ()
+      | Some record -> update_record record temp)
+  | Some record -> update_record record temp
 
 module Int_hashable : Tbl.Hashable with type t = Int.t = struct
   type t = Int.t
