@@ -5,11 +5,10 @@ module Par_seq = Parallel.Sequence
 module Tbl = Portable_lockfree_htbl
 
 
-let name = "par"
+let name = "no_sequence"
 
 let magic_shared (x : 'a) : 'a @ shared = Obj.magic Obj.magic x
 let magic_uncontended (x : 'a) : 'a @ uncontended = Obj.magic Obj.magic x
-let magic_portable (x : 'a) : 'a @ portable = Obj.magic Obj.magic x
 
 (* Bigstring.unsafe_find doesn't yet take its argument shared-ly... *)
 
@@ -87,29 +86,6 @@ let [@zero_alloc] parse_line buf ~(start_idx : int) ~(semic_idx : int) =
   let temp = parse_temp buf (semic_idx + 1) in
   #(~town_hash,~temp)
 
-
-let split_lines (buf @ shared) : (start_idx:int * semic_idx:int) Par_seq.t =
-  let next _ (start_idx,end_idx) = 
-    if start_idx >= end_idx then
-      Pair_or_null.none ()
-    else
-      let semic_idx = unsafe_bigstring_find ~pos:start_idx ~len:(end_idx - start_idx) buf ';' in
-      let newline_idx = unsafe_bigstring_find ~pos:semic_idx ~len:(end_idx - semic_idx) buf '\n' in
-      Pair_or_null.some (~start_idx,~semic_idx) (newline_idx + 1,end_idx)
-  in
-  let split _ (start_idx,end_idx) =
-    if start_idx >= end_idx then
-      Pair_or_null.none ()
-    else
-      if unsafe_bigstring_find ~pos:start_idx ~len:(end_idx - start_idx) buf '\n' < 0 then
-        Pair_or_null.none ()
-      else
-        let half_approx = (start_idx + end_idx) / 2 in
-        let half_start = 1 + unsafe_bigstring_find ~pos:half_approx ~len:(end_idx - half_approx) buf '\n' in
-        Pair_or_null.some (start_idx,half_start) (half_start,end_idx)
-  in
-  exclave_ (Par_seq.unfold ~init:((0,Bigstring.length buf) : int * int) ~next:(magic_portable next) ~split:(magic_portable split))
-
 let max_with temp (x @ contended) @ portable = Int.max temp x
 let min_with temp (x @ contended) @ portable = Int.min temp x
 
@@ -144,10 +120,35 @@ let compute ~measurements ~outfile =
     let buf @ shared = Bigarray.array1_of_genarray (map_file meas_fd Bigarray.char Bigarray.c_layout ~shared:false [|-1|]) in
     let tbl = Tbl.create (module Int_hashable) ~min_buckets:10000 in
 
-    Par_seq.iter
+    let fork _ (start_idx,end_idx) =
+      if start_idx >= end_idx then
+        Pair_or_null.none ()
+      else
+        if unsafe_bigstring_find ~pos:start_idx ~len:(end_idx - start_idx) (magic_shared buf) '\n' < 0 then
+          Pair_or_null.none ()
+        else
+          let half_approx = (start_idx + end_idx) / 2 in
+          let half_start = 1 + unsafe_bigstring_find ~pos:half_approx ~len:(end_idx - half_approx) (magic_shared buf) '\n' in
+          Pair_or_null.some (start_idx,half_start) (half_start,end_idx)
+    in
+    let next _ () (start_idx,end_idx) =
+      if start_idx >= end_idx then
+        Pair_or_null.none ()
+      else
+        let semic_idx = unsafe_bigstring_find ~pos:start_idx ~len:(end_idx - start_idx) (magic_shared buf) ';' in
+        let newline_idx = unsafe_bigstring_find ~pos:semic_idx ~len:(end_idx - semic_idx) (magic_shared buf) '\n' in
+        compute_record (magic_shared buf) tbl ~start_idx ~semic_idx;
+        Pair_or_null.some () (newline_idx + 1, end_idx)
+    in
+
+    Parallel.fold
       parallel
-      (split_lines buf)
-      ~f:(fun _ (~start_idx,~semic_idx) -> compute_record (magic_shared buf) tbl ~start_idx ~semic_idx);
+      ~init:(fun () -> ())
+      ~state:((0,Bigstring.length buf) : int * int)
+      ~stop:(fun _ () -> ())
+      ~join:(fun _ () () -> ())
+      ~next
+      ~fork;
 
     let ofd = Out_channel.create outfile in
     Out_channel.output_string ofd "{";
