@@ -3,7 +3,8 @@ open! Core_unix
 open! Parallel
 module Par_seq = Parallel.Sequence
 module Tbl = Portable_lockfree_htbl
-let name = "hash_and_search"
+
+let name = "swar_hash"
 
 let [@zero_alloc assume] magic_shared (x : 'a) : 'a @ shared = Obj.magic Obj.magic x
 let magic_uncontended (x : 'a) : 'a @ uncontended = Obj.magic Obj.magic x
@@ -75,15 +76,34 @@ let [@zero_alloc] [@inline] parse_temp buf i =
   let newline_idx = i + (Bool.select is_neg 1 0) + (Bool.select is_short 3 4) in
   #(~temp:(sign * to_fixed ~fracs:frac ~ones ~tens),~newline_idx)
 
-let [@zero_alloc] [@inline] [@loop] rec hash_town_aux buf h i =
+let semic_broadcast = 0x3B3B3B3B3B3B3B3BL
+let lo_magic = 0x0101010101010101L
+let hi_magic = 0x8080808080808080L
+
+(* FNV-1a style mixing - simpler and faster than polynomial hash *)
+let [@zero_alloc] [@inline] hash_word h word =
+  let open Int64_u in
+  let word = of_int64 word in
+  (h lxor word) * #0x517cc1b727220a95L
+
+let [@zero_alloc] [@inline] [@loop] rec hash_town_slow buf h i =
   let b = Bigstring.unsafe_get_int8 ~pos:i buf in
   if Int.(=) b 59 then
-    #(~town_hash:h,~semic_idx:i)
+    #(~town_hash:(Int64_u.to_int_trunc h),~semic_idx:i)
   else
-    hash_town_aux buf (h * 31 + b) (i + 1)
+    hash_town_slow buf Int64_u.(h * #31L + of_int b) (i + 1)
+
+let [@zero_alloc] [@inline] [@loop] rec hash_town_aux buf (h : Int64_u.t) i =
+  let word = Base_bigstring.unsafe_get_int64_t_le buf ~pos:i in
+  let xored = Int64.(word lxor semic_broadcast) in
+  let has_semic = Int64.((xored - lo_magic) land (lnot xored) land hi_magic) in
+  if Int64.(has_semic <> 0L) then
+    hash_town_slow buf h i
+  else
+    hash_town_aux buf (hash_word h word) (i + 8)
 
 let [@zero_alloc] [@inline] hash_town buf ~start_pos =
-  hash_town_aux buf 0 start_pos
+  hash_town_aux buf #0L start_pos
 
 let [@zero_alloc] [@inline] parse_line buf ~(start_idx : int) =
   let #(~town_hash,~semic_idx) = hash_town buf ~start_pos:start_idx in
@@ -95,8 +115,8 @@ let min_with temp (x @ contended) @ portable = Int.min temp x
 
 let update_record (record : Record.t) temp =
   Atomic.incr record.count;
-  Atomic.update record.min ~pure_f:(min_with temp);
-  Atomic.update record.max ~pure_f:(max_with temp);
+  (* Atomic.update record.min ~pure_f:(min_with temp); *)
+  (* Atomic.update record.max ~pure_f:(max_with temp); *)
   Atomic.add record.tot temp
 
 let compute_record (buf @ shared) tbl ~start_idx =

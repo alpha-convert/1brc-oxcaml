@@ -72,7 +72,7 @@ let [@zero_alloc] parse_temp buf i =
   let ones = Bool.select is_short (b0 - 48) (b1 - 48) in
   let frac = Bool.select is_short (b2 - 48) (b3 - 48) in
 
-  let newline_idx = i + 1 + (Bool.select is_neg 1 0) + (Bool.select is_short 3 4) in
+  let newline_idx = i + (Bool.select is_neg 1 0) + (Bool.select is_short 3 4) in
   #(~temp:(sign * to_fixed ~fracs:frac ~ones ~tens),~newline_idx)
 
 let [@zero_alloc] rec hash_town_aux buf h i end_pos =
