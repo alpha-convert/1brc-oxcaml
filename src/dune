@@ -4,3 +4,7 @@
  (inline_tests)
  (preprocess
   (pps ppx_jane)))
+
+(env
+  (dev
+    (flags (:standard -warn-error -A))))
