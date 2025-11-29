@@ -122,7 +122,7 @@ let compute_record (buf @ shared) tbl ~start_idx =
   record.count <- record.count + 1;
   record.min <- Int.min record.min temp;
   record.max <- Int.max record.max temp;
-  record.tot <- record.count + temp;
+  record.tot <- record.tot + temp;
   newline_idx
 
 
@@ -131,7 +131,7 @@ let compute ~measurements ~outfile =
   let buf @ shared = Bigarray.array1_of_genarray (map_file meas_fd Bigarray.char Bigarray.c_layout ~shared:false [|-1|]) in
 
   let buf_len = Bigstring.length buf in
-  let num_chunks = 100 in
+  let num_chunks = 8 in
   let chunk_size = buf_len / num_chunks in
 
   let chunk_bounds =

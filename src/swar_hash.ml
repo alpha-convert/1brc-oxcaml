@@ -122,8 +122,8 @@ let min_with temp (x @ contended) @ portable = Int.min temp x
 
 let update_record (record : Record.t) temp =
   Atomic.incr record.count;
-  (* Atomic.update record.min ~pure_f:(min_with temp); *)
-  (* Atomic.update record.max ~pure_f:(max_with temp); *)
+  Atomic.update record.min ~pure_f:(min_with temp);
+  Atomic.update record.max ~pure_f:(max_with temp);
   Atomic.add record.tot temp
 
 let compute_record (buf @ shared) tbl ~start_idx =

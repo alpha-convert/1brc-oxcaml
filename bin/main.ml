@@ -15,47 +15,42 @@ let bench i =
     (fun () -> I.compute ~measurements ~outfile)
 
 
-let impls : (module Impl) list = [
-  (module One_brc.Reference);
-  (module One_brc.Imperative);
-  (module One_brc.Unboxed);
-  (module One_brc.Mmap);
-  (module One_brc.Fixed_precision);
-  (module One_brc.Key_by_hash);
-  (module One_brc.Branchless);
-  (module One_brc.Par);
-  (module One_brc.No_sequence);
-  (module One_brc.Packed_state);
-  (module One_brc.Swar_temp);
-  (module One_brc.One_less_memchr);
-  (module One_brc.Hash_and_search);
-  (module One_brc.Swar_hash);
-  (module One_brc.Manual_par);
+let impls : ((module Impl) * string option) list = [
+  ((module One_brc.Reference), None);
+  ((module One_brc.Imperative), Some "reference");
+  ((module One_brc.Unboxed), Some "reference");
+  ((module One_brc.Mmap), Some "reference");
+  ((module One_brc.Fixed_precision), None);
+  ((module One_brc.Key_by_hash), Some "fixed_precision");
+  ((module One_brc.Branchless), Some "fixed_precision");
+  ((module One_brc.Par), Some "fixed_precision");
+  ((module One_brc.No_sequence), Some "fixed_precision");
+  ((module One_brc.Packed_state), Some "fixed_precision");
+  ((module One_brc.Swar_temp), Some "fixed_precision");
+  ((module One_brc.One_less_memchr), Some "fixed_precision");
+  ((module One_brc.Hash_and_search), Some "fixed_precision");
+  ((module One_brc.Swar_hash), Some "fixed_precision");
+  ((module One_brc.Manual_par), Some "fixed_precision");
 ]
 
-let float_impls = ["reference"; "imperative"; "unboxed"; "mmap"]
-
 let check_all () =
-  let reference_file = "res-" ^ num ^ "-reference.txt" in
-  let fixed_file = "res-" ^ num ^ "-fixed_precision.txt" in
-  let reference = In_channel.read_all reference_file in
-  let fixed = In_channel.read_all fixed_file in
-  List.iter impls ~f:(fun i ->
+  List.iter impls ~f:(fun (i, ref_name) ->
     let module I = (val i : Impl) in
-    if String.(I.name = "reference" || I.name = "fixed_precision") then ()
-    else begin
+    match ref_name with
+    | None -> ()
+    | Some ref_name ->
       let outfile = "res-" ^ num ^ "-" ^ I.name ^ ".txt" in
+      let ref_file = "res-" ^ num ^ "-" ^ ref_name ^ ".txt" in
       let contents = In_channel.read_all outfile in
-      let expected = if List.mem float_impls I.name ~equal:String.equal then reference else fixed in
+      let expected = In_channel.read_all ref_file in
       if String.(contents <> expected) then
         printf "MISMATCH: %s\n" I.name
       else
         printf "OK: %s\n" I.name
-    end
   )
 
 let () = Command_unix.run (
-  Bench.make_command (List.map impls ~f:(fun i -> bench i))
+  Bench.make_command (List.map impls ~f:(fun (i, _) -> bench i))
 )
 
 let _ = check_all ()
