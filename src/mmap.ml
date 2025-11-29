@@ -27,7 +27,8 @@ let process_file buf =
     let i_newline = Bigstring.unsafe_find ~pos:i_semic ~len:(buf_len - i_semic) buf '\n' in
     let town = Bigstring.get_string ~pos:i ~len:(i_semic - i) buf in
     let temp_s = Bigstring.get_string ~pos:(i_semic + 1) ~len:(i_newline - (i_semic + 1)) buf in
-    #(town,temp_s,i_newline + 1) in
+    #(town,temp_s,i_newline + 1)
+  in
   let rec loop i =
     if i >= buf_len  then () else
       let #(town,temp_s,idx_next) = parse_from i in
@@ -45,12 +46,10 @@ let process_file buf =
 let compute ~measurements ~outfile =
   let meas_fd = openfile ~mode:[O_RDONLY] measurements in
   let meas_data : Bigstring.t = Bigarray.array1_of_genarray (map_file meas_fd Bigarray.char Bigarray.c_layout ~shared:false [|-1|]) in
-  (* let fcontents = In_channel.read_all measurements in *)
   let res = process_file meas_data in
   let ofd = Out_channel.create outfile in
-  Out_channel.output_string ofd "{";
-  Hashtbl.iteri res ~f:(fun ~key ~data ->
+  let sorted = Hashtbl.to_alist res |> List.sort ~compare:(fun (k1,_) (k2,_) -> String.compare k1 k2) in
+  List.iter sorted ~f:(fun (key, data) ->
     let mean = Float_u.(data.tot / (Int64_u.to_float data.count)) in
-    Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f," key (Float_u.to_float data.min) (Float_u.to_float mean) (Float_u.to_float data.max))
+    Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f\n" key (Float_u.to_float data.min) (Float_u.to_float mean) (Float_u.to_float data.max))
   );
-  Out_channel.output_string ofd "}";

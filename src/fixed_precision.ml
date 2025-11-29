@@ -78,12 +78,11 @@ let compute ~measurements ~outfile =
   let meas_data : Bigstring.t = Bigarray.array1_of_genarray (map_file meas_fd Bigarray.char Bigarray.c_layout ~shared:false [|-1|]) in
   let res = process_file meas_data in
   let ofd = Out_channel.create outfile in
-  Out_channel.output_string ofd "{";
-  Hashtbl.iteri res ~f:(fun ~key ~data ->
+  let sorted = Hashtbl.to_alist res |> List.sort ~compare:(fun (k1,_) (k2,_) -> String.compare k1 k2) in
+  List.iter sorted ~f:(fun (key, data) ->
     let min = to_floating data.min in
     let max = to_floating data.max in
     let tot = to_floating data.tot in
     let mean = tot /. (Float_u.to_float (Int64_u.to_float data.count)) in
-    Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f," key min mean max)
+    Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f\n" key min mean max)
   );
-  Out_channel.output_string ofd "}";

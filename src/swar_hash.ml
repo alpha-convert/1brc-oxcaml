@@ -80,11 +80,18 @@ let semic_broadcast = 0x3B3B3B3B3B3B3B3BL
 let lo_magic = 0x0101010101010101L
 let hi_magic = 0x8080808080808080L
 
-(* FNV-1a style mixing - simpler and faster than polynomial hash *)
+(* Polynomial hash for 8 bytes: h * 31^8 + b0*31^7 + b1*31^6 + ... + b7 *)
 let [@zero_alloc] [@inline] hash_word h word =
   let open Int64_u in
   let word = of_int64 word in
-  (h lxor word) * #0x517cc1b727220a95L
+  let h = h * #31L + (word land #0xFFL) in
+  let h = h * #31L + ((lsr) word 8 land #0xFFL) in
+  let h = h * #31L + ((lsr) word 16 land #0xFFL) in
+  let h = h * #31L + ((lsr) word 24 land #0xFFL) in
+  let h = h * #31L + ((lsr) word 32 land #0xFFL) in
+  let h = h * #31L + ((lsr) word 40 land #0xFFL) in
+  let h = h * #31L + ((lsr) word 48 land #0xFFL) in
+  h * #31L + ((lsr) word 56 land #0xFFL)
 
 let [@zero_alloc] [@inline] [@loop] rec hash_town_slow buf h i =
   let b = Bigstring.unsafe_get_int8 ~pos:i buf in
@@ -183,16 +190,17 @@ let compute ~measurements ~outfile =
       ~fork;
 
     let ofd = Out_channel.create outfile in
-    Out_channel.output_string ofd "{";
-    List.iter (magic_uncontended (Tbl.to_alist tbl)) ~f:(fun (_,data)->
+    let with_towns = magic_uncontended (Tbl.to_alist tbl) |> List.map ~f:(fun (_, data) ->
+      let town = Bigstring.get_string ~pos:data.town_idx ~len:data.town_len (Obj.magic Obj.magic buf) in
+      (town, data)) in
+    let sorted = List.sort with_towns ~compare:(fun (k1,_) (k2,_) -> String.compare k1 k2) in
+    List.iter sorted ~f:(fun (town, data)->
       let min = to_floating (Atomic.get data.min) in
       let max = to_floating (Atomic.get data.max) in
       let tot = to_floating (Atomic.get data.tot) in
       let mean = tot /. (Int.to_float (Atomic.get data.count)) in
-      let town = Bigstring.get_string ~pos:data.town_idx ~len:data.town_len (Obj.magic Obj.magic buf) in
-      Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f," town min mean max)
+      Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f\n" town min mean max)
     );
-    Out_channel.output_string ofd "}";
   ) 
 
 

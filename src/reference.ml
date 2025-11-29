@@ -43,7 +43,7 @@ let process_file lines =
     | None -> Record.unit temp
     | Some record -> Record.merge record (Record.unit temp)
   in
-  List.fold_right lines ~init:(String.Map.empty) ~f:(fun line records ->
+  List.fold lines ~init:(String.Map.empty) ~f:(fun records line ->
     let (town,temp_s) = String.lsplit2_exn line ~on:';' in
     let temp = Float.of_string temp_s in
     Map.update records town ~f:(update_or_add temp)
@@ -54,10 +54,7 @@ let compute ~measurements ~outfile =
     let lines = String.split_lines fcontents in
     let res = process_file lines in
     let ofd = Out_channel.create outfile in
-    Out_channel.output_string ofd "{";
     Map.iteri res ~f:(fun ~key ~data ->
       let mean = Float.(data.tot / (of_int data.count)) in
-      Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f," key data.min mean data.max)
+      Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f\n" key data.min mean data.max)
     );
-    Out_channel.output_string ofd "}";
-    (* print_s (String.Map.sexp_of_t Record.sexp_of_t res) *)

@@ -23,7 +23,7 @@ end
 
 let process_file lines =
   let tbl = String.Table.create () in
-  List.fold_right lines ~init:() ~f:(fun line () ->
+  List.iter lines ~f:(fun line ->
     let (town,temp_s) = String.lsplit2_exn line ~on:';' in
     let temp = Float.of_string temp_s in
     let record = Hashtbl.find_or_add tbl town ~default:(fun () -> {Record.count = 0; min = Float.max_value; max = Float.min_value; tot = 0.0}) in
@@ -39,9 +39,8 @@ let compute ~measurements ~outfile =
     let lines = String.split_lines fcontents in
     let res = process_file lines in
     let ofd = Out_channel.create outfile in
-    Out_channel.output_string ofd "{";
-    Hashtbl.iteri res ~f:(fun ~key ~data ->
+    let sorted = Hashtbl.to_alist res |> List.sort ~compare:(fun (k1,_) (k2,_) -> String.compare k1 k2) in
+    List.iter sorted ~f:(fun (key, data) ->
       let mean = Float.(data.tot / (of_int data.count)) in
-      Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f," key data.min mean data.max)
+      Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f\n" key data.min mean data.max)
     );
-    Out_channel.output_string ofd "}";

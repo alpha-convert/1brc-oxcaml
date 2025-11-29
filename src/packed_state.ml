@@ -159,16 +159,17 @@ let compute ~measurements ~outfile =
       ~fork;
 
     let ofd = Out_channel.create outfile in
-    Out_channel.output_string ofd "{";
-    List.iter (magic_uncontended (Tbl.to_alist tbl)) ~f:(fun (_,data)->
+    let with_towns = magic_uncontended (Tbl.to_alist tbl) |> List.map ~f:(fun (_, data) ->
+      let town = Bigstring.get_string ~pos:data.town_idx ~len:data.town_len (Obj.magic Obj.magic buf) in
+      (town, data)) in
+    let sorted = List.sort with_towns ~compare:(fun (k1,_) (k2,_) -> String.compare k1 k2) in
+    List.iter sorted ~f:(fun (town, data)->
       let min = to_floating (Atomic.get data.min) in
       let max = to_floating (Atomic.get data.max) in
       let tot = to_floating (Atomic.get data.tot) in
       let mean = tot /. (Int.to_float (Atomic.get data.count)) in
-      let town = Bigstring.get_string ~pos:data.town_idx ~len:data.town_len (Obj.magic Obj.magic buf) in
-      Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f," town min mean max)
+      Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f\n" town min mean max)
     );
-    Out_channel.output_string ofd "}";
   ) 
 
 
