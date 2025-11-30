@@ -1,6 +1,9 @@
 (library
  (name one_brc)
  (libraries core parallel core_unix parallel.scheduler portable_lockfree_htbl portable)
+ (foreign_stubs
+  (language c)
+  (names memchr_stubs))
  (inline_tests)
  (preprocess
   (pps ppx_jane)))

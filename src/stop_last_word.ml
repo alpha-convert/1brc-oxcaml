@@ -3,7 +3,7 @@ open! Core_unix
 open! Parallel
 module Par_seq = Parallel.Sequence
 
-let name = "manual_par"
+let name = "stop_last_word"
 
 let [@zero_alloc assume] magic_shared (x : 'a) : 'a @ shared = Obj.magic Obj.magic x
 
@@ -80,28 +80,21 @@ let hi_magic = 0x8080808080808080L
 let [@zero_alloc] [@inline] hash_word h word =
   let open Int64_u in
   let word = of_int64 word in
-  let h = h * #31L + (word land #0xFFL) in
-  let h = h * #31L + ((lsr) word 8 land #0xFFL) in
-  let h = h * #31L + ((lsr) word 16 land #0xFFL) in
-  let h = h * #31L + ((lsr) word 24 land #0xFFL) in
-  let h = h * #31L + ((lsr) word 32 land #0xFFL) in
-  let h = h * #31L + ((lsr) word 40 land #0xFFL) in
-  let h = h * #31L + ((lsr) word 48 land #0xFFL) in
-  h * #31L + ((lsr) word 56 land #0xFFL)
-
-let [@zero_alloc] [@inline] [@loop] rec hash_town_slow buf h i =
-  let b = Bigstring.unsafe_get_int8 ~pos:i buf in
-  if Int.(=) b 59 then
-    #(~town_hash:(Int64_u.to_int_trunc h),~semic_idx:i)
-  else
-    hash_town_slow buf Int64_u.(h * #31L + of_int b) (i + 1)
+  h lxor word lxor ((lsr) word 17)
 
 let [@zero_alloc] [@inline] [@loop] rec hash_town_aux buf (h : Int64_u.t) i =
   let word = Base_bigstring.unsafe_get_int64_t_le buf ~pos:i in
   let xored = Int64.(word lxor semic_broadcast) in
   let has_semic = Int64.((xored - lo_magic) land (lnot xored) land hi_magic) in
   if Int64.(has_semic <> 0L) then
-    hash_town_slow buf h i
+    let semic_bit_idx = Int64.ctz has_semic in
+    let byte_idx = Int64.to_int_trunc semic_bit_idx / 8 in
+    let semic_idx = i + byte_idx in
+    (* Mask out bytes at and after the semicolon, then hash the partial word *)
+    let mask = Int64.((1L lsl (Int64.to_int_trunc semic_bit_idx)) - 1L) in
+    let masked_word = Int64.(word land mask) in
+    let h = hash_word h masked_word in
+    #(~town_hash:(Int64_u.to_int_trunc h),~semic_idx)
   else
     hash_town_aux buf (hash_word h word) (i + 8)
 
@@ -115,15 +108,15 @@ let [@zero_alloc] [@inline] parse_line buf ~(start_idx : int) =
 
 let compute_record (buf @ shared) tbl ~start_idx =
   let #(~town_hash,~temp,~semic_idx,~newline_idx) = parse_line buf ~start_idx in
-  let record = Hashtbl.find_or_add tbl town_hash ~default:(fun () ->
-    {Record.town_idx = start_idx; town_len = semic_idx - start_idx; count = 0; min = Int.max_value ; max = Int.min_value; tot = 0})
-  in
-  record.count <- record.count + 1;
-  record.min <- Int.min record.min temp;
-  record.max <- Int.max record.max temp;
-  record.tot <- record.tot + temp;
+  (match%optional.Or_null Hashtbl.find_or_null tbl town_hash with
+  | None ->
+    ignore (Hashtbl.add tbl town_hash {Record.town_idx = start_idx; town_len = semic_idx - start_idx; count = 1; min = temp ; max = temp; tot = temp})
+  | Some record ->
+    record.count <- record.count + 1;
+    record.min <- Int.min record.min temp;
+    record.max <- Int.max record.max temp;
+    record.tot <- record.tot + temp);
   newline_idx
-
 
 let compute ~measurements ~outfile =
   let meas_fd = openfile ~mode:[O_RDONLY] measurements in

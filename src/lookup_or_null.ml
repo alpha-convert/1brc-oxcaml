@@ -3,7 +3,7 @@ open! Core_unix
 open! Parallel
 module Par_seq = Parallel.Sequence
 
-let name = "manual_par"
+let name = "lookup_or_null"
 
 let [@zero_alloc assume] magic_shared (x : 'a) : 'a @ shared = Obj.magic Obj.magic x
 
@@ -80,14 +80,7 @@ let hi_magic = 0x8080808080808080L
 let [@zero_alloc] [@inline] hash_word h word =
   let open Int64_u in
   let word = of_int64 word in
-  let h = h * #31L + (word land #0xFFL) in
-  let h = h * #31L + ((lsr) word 8 land #0xFFL) in
-  let h = h * #31L + ((lsr) word 16 land #0xFFL) in
-  let h = h * #31L + ((lsr) word 24 land #0xFFL) in
-  let h = h * #31L + ((lsr) word 32 land #0xFFL) in
-  let h = h * #31L + ((lsr) word 40 land #0xFFL) in
-  let h = h * #31L + ((lsr) word 48 land #0xFFL) in
-  h * #31L + ((lsr) word 56 land #0xFFL)
+  h lxor word lxor ((lsr) word 17)
 
 let [@zero_alloc] [@inline] [@loop] rec hash_town_slow buf h i =
   let b = Bigstring.unsafe_get_int8 ~pos:i buf in
@@ -115,15 +108,15 @@ let [@zero_alloc] [@inline] parse_line buf ~(start_idx : int) =
 
 let compute_record (buf @ shared) tbl ~start_idx =
   let #(~town_hash,~temp,~semic_idx,~newline_idx) = parse_line buf ~start_idx in
-  let record = Hashtbl.find_or_add tbl town_hash ~default:(fun () ->
-    {Record.town_idx = start_idx; town_len = semic_idx - start_idx; count = 0; min = Int.max_value ; max = Int.min_value; tot = 0})
-  in
-  record.count <- record.count + 1;
-  record.min <- Int.min record.min temp;
-  record.max <- Int.max record.max temp;
-  record.tot <- record.tot + temp;
+  (match%optional.Or_null Hashtbl.find_or_null tbl town_hash with
+  | None ->
+    ignore (Hashtbl.add tbl town_hash {Record.town_idx = start_idx; town_len = semic_idx - start_idx; count = 1; min = temp ; max = temp; tot = temp})
+  | Some record ->
+    record.count <- record.count + 1;
+    record.min <- Int.min record.min temp;
+    record.max <- Int.max record.max temp;
+    record.tot <- record.tot + temp);
   newline_idx
-
 
 let compute ~measurements ~outfile =
   let meas_fd = openfile ~mode:[O_RDONLY] measurements in
