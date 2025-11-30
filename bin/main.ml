@@ -4,7 +4,7 @@ open! Core_bench
 
 module type Impl = One_brc.One_brc_intf.T
 
-let num = "1mm"
+let num = "100mm"
 
 let bench i =
   let module I = (val i : Impl) in
@@ -16,7 +16,7 @@ let bench i =
 
 
 let impls : ((module Impl) * string option) list = [
-  ((module One_brc.Reference), None);
+  (* ((module One_brc.Reference), None);
   ((module One_brc.Imperative), Some "reference");
   ((module One_brc.Unboxed), Some "reference");
   ((module One_brc.Mmap), Some "reference");
@@ -25,12 +25,16 @@ let impls : ((module Impl) * string option) list = [
   ((module One_brc.Branchless), Some "fixed_precision");
   ((module One_brc.Par), Some "fixed_precision");
   ((module One_brc.No_sequence), Some "fixed_precision");
-  ((module One_brc.Packed_state), Some "fixed_precision");
-  ((module One_brc.Swar_temp), Some "fixed_precision");
+  ((module One_brc.Packed_state), Some "fixed_precision"); *)
+  (* ((module One_brc.Swar_temp), Some "fixed_precision");
   ((module One_brc.One_less_memchr), Some "fixed_precision");
   ((module One_brc.Hash_and_search), Some "fixed_precision");
   ((module One_brc.Swar_hash), Some "fixed_precision");
   ((module One_brc.Manual_par), Some "fixed_precision");
+  ((module One_brc.Faster_word_hash), Some "fixed_precision");
+  ((module One_brc.Lookup_or_null), Some "fixed_precision"); *)
+  (* ((module One_brc.Stop_last_word), Some "fixed_precision"); *)
+  ((module One_brc.Unboxed2), Some "fixed_precision");
 ]
 
 let check_all () =
