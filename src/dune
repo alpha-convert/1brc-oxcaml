@@ -1,6 +1,6 @@
 (library
  (name one_brc)
- (libraries core parallel core_unix parallel.scheduler portable_lockfree_htbl portable)
+ (libraries core parallel core_unix parallel.scheduler portable_lockfree_htbl portable vec)
  (foreign_stubs
   (language c)
   (names memchr_stubs))

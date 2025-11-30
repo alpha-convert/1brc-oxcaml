@@ -1,0 +1,196 @@
+open! Core
+open! Core_unix
+open! Parallel
+module Par_seq = Parallel.Sequence
+
+let name = "unboxed2"
+
+let [@zero_alloc assume] magic_shared (x : 'a) : 'a @ shared = Obj.magic Obj.magic x
+
+(* Bigstring.unsafe_find doesn't yet take its argument shared-ly... *)
+
+external unsafe_bigstring_find
+: Bigstring.t @ shared
+  -> char
+  -> pos:int
+  -> len:int
+  -> int
+  @@ portable
+  = "bigstring_find"
+[@@noalloc]
+
+
+module Record : sig
+  type t = {
+    town_idx : Int64_u.t;
+    town_len : Int64_u.t;
+    mutable count : Int64_u.t;
+    mutable min : Int64_u.t;
+    mutable max : Int64_u.t;
+    mutable tot : Int64_u.t  }
+end
+= struct
+    type t = {
+    town_idx : Int64_u.t;
+    town_len : Int64_u.t;
+    mutable count : Int64_u.t;
+    mutable min : Int64_u.t;
+    mutable max : Int64_u.t;
+    mutable tot : Int64_u.t  }
+end
+
+let [@zero_alloc] [@inline] to_fixed ~fracs ~ones ~tens =
+  let open Int64_u in
+  #100L * tens + #10L * ones + fracs
+
+let to_floating fixed =
+  (Float_u.to_float (Int64_u.to_float fixed)) /. 10.0
+
+let [@zero_alloc] select' b x y =
+  let open Int64_u in
+  b * x + (#1L - b) * y
+
+let [@zero_alloc] [@inline] parse_temp buf i =
+  let open Int64_u in
+  let word = Int64_u.of_int64 (Base_bigstring.unsafe_get_int64_t_le buf ~pos:(Int64_u.to_int_trunc i)) in
+
+  let byte0 = word land #0xFFL in
+  let is_neg = of_bool (byte0 = #0x2DL (* '-' *)) in
+  let shift = select' is_neg #8L #0L in
+  let sign = select' is_neg (-#1L) #1L in
+
+  (* Option 1: x.y_
+     Option 2: xx.y
+  *)
+  let nums_word = word lsr (to_int_exn shift) in
+  let b0 = nums_word land #0xFFL in
+  let b1 = nums_word lsr 8 land #0xFFL in
+  let b2 = nums_word lsr 16 land #0xFFL in
+  let b3 = nums_word lsr 24 land #0xFFL in
+
+  let is_short = of_bool (b1 = #0x2EL (* '.' *)) in
+
+  let tens = select' is_short #0L (b0 - #48L) in
+  let ones = select' is_short b0 b1 - #48L in
+  let frac = select' is_short b2 b3 - #48L in
+
+  let newline_idx = i + (select' is_neg #1L #0L) + (select' is_short #3L #4L) in
+  #(~temp:(sign * to_fixed ~fracs:frac ~ones ~tens),~newline_idx)
+
+let semic_broadcast = 0x3B3B3B3B3B3B3B3BL
+let lo_magic = 0x0101010101010101L
+let hi_magic = 0x8080808080808080L
+
+let [@zero_alloc] [@inline] hash_word h word =
+  let open Int64_u in
+  h lxor word lxor ((lsr) word 17)
+
+let [@zero_alloc] [@inline] [@loop] rec hash_town_aux buf (h : Int64_u.t) i =
+  let open Int64_u in
+  let word = of_int64 (Base_bigstring.unsafe_get_int64_t_le buf ~pos:(to_int_trunc i)) in
+  let xored = word lxor (of_int64 semic_broadcast) in
+  let has_semic = (xored - of_int64 lo_magic) land (lnot xored) land (of_int64 hi_magic) in
+  if has_semic = #0L then
+    hash_town_aux buf (hash_word h word) (i + #8L)
+  else
+    let semic_bit_idx = ctz has_semic in
+    let byte_idx = semic_bit_idx / #8L in
+    let semic_idx = i + byte_idx in
+    let mask = (#1L lsl (to_int_exn semic_bit_idx)) - #1L in
+    let h = hash_word h (word land mask) in
+    #(~town_hash:h,~semic_idx)
+
+let [@zero_alloc] [@inline] hash_town buf ~start_pos =
+  hash_town_aux buf #0L start_pos
+
+let [@zero_alloc] [@inline] parse_line buf ~start_idx =
+  let open Int64_u in
+  let #(~town_hash,~semic_idx) = hash_town buf ~start_pos:start_idx in
+  let #(~temp,~newline_idx) = parse_temp buf (semic_idx + #1L) in
+  #(~town_hash,~temp,~semic_idx,~newline_idx)
+
+let compute_record (buf @ shared) tbl ~start_idx =
+  let open Int64_u in
+  let #(~town_hash,~temp,~semic_idx,~newline_idx) = parse_line buf ~start_idx in
+  (match%optional.Or_null Hashtbl.find_or_null tbl (to_int_trunc town_hash) with
+  | None ->
+    ignore (Hashtbl.add tbl ~key:(to_int_trunc town_hash) ~data:{Record.town_idx = start_idx; town_len = semic_idx - start_idx; count = #1L; min = temp ; max = temp; tot = temp})
+  | Some record ->
+    record.count <- record.count + #1L;
+    record.min <- min record.min temp;
+    record.max <- max record.max temp;
+    record.tot <- record.tot + temp);
+  newline_idx
+
+let compute ~measurements ~outfile =
+  let open Int64_u in
+  let meas_fd = openfile ~mode:[O_RDONLY] measurements in
+  let buf @ shared = Bigarray.array1_of_genarray (map_file meas_fd Bigarray.char Bigarray.c_layout ~shared:false [|-1|]) in
+
+  let buf_len = Bigstring.length buf in
+  let num_chunks = 16 in
+  let chunk_size = Int.(/) buf_len num_chunks in
+
+  let open struct
+    type chunk = {
+      start_idx : Int64_u.t;
+      end_idx : Int64_u.t;
+    }
+  end in
+
+  let chunk_bounds =
+    List.init num_chunks ~f:(fun i ->
+      let start_idx =
+        if Int.(=) i 0 then 0
+        else
+          let approx = Int.(i * chunk_size) in
+          Int.(1 + unsafe_bigstring_find (magic_shared buf) '\n' ~pos:approx ~len:(buf_len - approx))
+      in
+      let end_idx =
+        if Int.(i = (num_chunks - 1)) then buf_len
+        else
+          let approx = Int.((i + 1) * chunk_size) in
+          Int.(1 + unsafe_bigstring_find (magic_shared buf) '\n' ~pos:approx ~len:(buf_len - approx))
+      in
+      {start_idx = of_int start_idx; end_idx = of_int end_idx})
+  in
+
+  let tasks =
+    let rec go i end_idx tbl = 
+      if i >= end_idx then
+        tbl
+      else
+        let newline_idx = compute_record (magic_shared buf) tbl ~start_idx:i in
+        go (newline_idx + #1L) end_idx tbl
+    in
+    List.map chunk_bounds ~f:(fun chunk-> Domain.spawn (fun () -> let tbl = Int.Table.create () in go (chunk.start_idx) (chunk.end_idx) tbl))
+  in
+
+  let results = List.map tasks ~f:Domain.join in
+
+  let merged = Int.Table.create () in
+  List.iter results ~f:(fun tbl ->
+    Hashtbl.iteri tbl ~f:(fun ~key ~data ->
+      Hashtbl.update merged key ~f:(function
+        | None -> data
+        | Some existing ->
+          existing.count <- existing.count + data.count;
+          existing.min <- min existing.min data.min;
+          existing.max <- max existing.max data.max;
+          existing.tot <- existing.tot + data.tot;
+          existing)));
+
+  let ofd = Out_channel.create outfile in
+  let with_towns = Hashtbl.to_alist merged |> List.map ~f:(fun (_, data) ->
+    let town = Bigstring.get_string ~pos:(to_int_trunc data.town_idx) ~len:(to_int_exn data.town_len) (Obj.magic Obj.magic buf) in
+    (town, data)) in
+  let sorted = List.sort with_towns ~compare:(fun (k1,_) (k2,_) -> String.compare k1 k2) in
+  List.iter sorted ~f:(fun (town, data) ->
+    let min = to_floating data.min in
+    let max = to_floating data.max in
+    let tot = to_floating data.tot in
+    let mean = tot /. (Float_u.to_float (Int64_u.to_float data.count)) in
+    Out_channel.output_string ofd (Printf.sprintf "%s=%.1f/%.1f/%.1f\n" town min mean max)
+  );
+
+
