@@ -86,17 +86,16 @@ let [@zero_alloc] [@inline] [@loop] rec hash_town_aux buf (h : Int64_u.t) i =
   let word = Base_bigstring.unsafe_get_int64_t_le buf ~pos:i in
   let xored = Int64.(word lxor semic_broadcast) in
   let has_semic = Int64.((xored - lo_magic) land (lnot xored) land hi_magic) in
-  if Int64.(has_semic <> 0L) then
+  if Int64.(has_semic = 0L) then
+    hash_town_aux buf (hash_word h word) (i + 8)
+  else
     let semic_bit_idx = Int64.ctz has_semic in
     let byte_idx = Int64.to_int_trunc semic_bit_idx / 8 in
     let semic_idx = i + byte_idx in
-    (* Mask out bytes at and after the semicolon, then hash the partial word *)
     let mask = Int64.((1L lsl (Int64.to_int_trunc semic_bit_idx)) - 1L) in
     let masked_word = Int64.(word land mask) in
     let h = hash_word h masked_word in
     #(~town_hash:(Int64_u.to_int_trunc h),~semic_idx)
-  else
-    hash_town_aux buf (hash_word h word) (i + 8)
 
 let [@zero_alloc] [@inline] hash_town buf ~start_pos =
   hash_town_aux buf #0L start_pos
